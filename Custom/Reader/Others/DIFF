@@ -1,0 +1,210 @@
+
+project external/libnfc-nxp/
+diff --git a/Android.mk b/Android.mk
+index bed9e07..eb6c81a 100644
+--- a/Android.mk
++++ b/Android.mk
+@@ -136,6 +136,32 @@ LOCAL_MODULE:= libnfc
+ LOCAL_MODULE_TAGS := optional
+ LOCAL_SHARED_LIBRARIES := libcutils libnfc_ndef libdl libhardware
+ 
++#################################################
++#       		Details for swissknife    		#
++#################################################
++
++#details for swissknife
++LOCAL_SRC_FILES += Linux_x86/swissknife.c
++LOCAL_CFLAGS += -DEXECUTIONSPERBATCH=1  
++LOCAL_CFLAGS += -DTIMELOW=6250000  
++LOCAL_CFLAGS += -DTIMEHIGH=TIMELOW+1500000  
++LOCAL_SHARED_LIBRARIES += libssl libcrypto
++LOCAL_CFLAGS += -Iexternal/openssl/include
++LOCAL_CFLAGS += -DLOGSWISSKNIFE=1
++
++#specific 8 bits version details for swissknife
++# LOCAL_CFLAGS += -DSWISSKNIFEVERSION=8  
++# LOCAL_CFLAGS += -DTHRESHOLD=20 
++
++#specific 1 bit version details for swissknife
++LOCAL_CFLAGS += -DSWISSKNIFEVERSION=1 
++LOCAL_CFLAGS += -DTHRESHOLD=14 
++
++#################################################
++#     		End details for swissknife    		#
++#################################################
++
++
+ include $(BUILD_SHARED_LIBRARY)
+ 
+ #
+diff --git a/Linux_x86/phDal4Nfc.c b/Linux_x86/phDal4Nfc.c
+index 8683a17..2c468be 100644
+--- a/Linux_x86/phDal4Nfc.c
++++ b/Linux_x86/phDal4Nfc.c
+@@ -51,6 +51,11 @@
+ #include <hardware/hardware.h>
+ #include <hardware/nfc.h>
+ 
++#ifdef SWISSKNIFEVERSION
++    #include <swissknife.h>
++    extern uint8_t last_ns;
++    extern uint8_t last_nr;
++#endif
+ 
+ /*-----------------------------------------------------------------------------------
+                                        TYPES
+@@ -803,6 +808,39 @@ retry:
+         }
+         DAL_PRINT("RX Thread }\n"); */
+ 
++        #ifdef SWISSKNIFEVERSION 
++            #if SWISSKNIFEVERSION==8
++                int continueSwissKnife = SwissKnife8Bits(gReadWriteContext.pReadBuffer,gReadWriteContext.nNbOfBytesRead);        
++            #else
++                int continueSwissKnife = SwissKnife1Bit(gReadWriteContext.pReadBuffer,gReadWriteContext.nNbOfBytesRead);                    
++            #endif
++            while(continueSwissKnife)
++            {
++                struct timespec time,time2;
++                gReadWriteContext.nNbOfBytesToRead = 1; 
++                clock_gettime(CLOCK_MONOTONIC, &time);
++                gReadWriteContext.nNbOfBytesRead = gLinkFunc.read(gReadWriteContext.pReadBuffer, gReadWriteContext.nNbOfBytesToRead);
++                gReadWriteContext.nNbOfBytesToRead = gReadWriteContext.pReadBuffer[0];
++                if(receivedMessages < 32)
++                    receiving[receivedMessages] = (time.tv_sec*1000000000)+time.tv_nsec;            
++                if(gReadWriteContext.nNbOfBytesToRead == 3)
++                {
++                    gReadWriteContext.nNbOfBytesRead = gLinkFunc.read(gReadWriteContext.pReadBuffer, gReadWriteContext.nNbOfBytesToRead);
++                    gReadWriteContext.nNbOfBytesToRead = 1;
++                    gReadWriteContext.nNbOfBytesRead = gLinkFunc.read(gReadWriteContext.pReadBuffer, gReadWriteContext.nNbOfBytesToRead);
++                    gReadWriteContext.nNbOfBytesToRead = gReadWriteContext.pReadBuffer[0];
++                }
++                gReadWriteContext.nNbOfBytesRead = gLinkFunc.read(gReadWriteContext.pReadBuffer, gReadWriteContext.nNbOfBytesToRead);
++            #if SWISSKNIFEVERSION==8
++                continueSwissKnife = SwissKnife8Bits(gReadWriteContext.pReadBuffer,gReadWriteContext.nNbOfBytesRead);        
++            #else
++                continueSwissKnife = SwissKnife1Bit(gReadWriteContext.pReadBuffer,gReadWriteContext.nNbOfBytesRead);                    
++            #endif
++                gReadWriteContext.nNbOfBytesToRead = gReadWriteContext.nNbOfBytesRead;
++            }
++        #endif
++
++        ALOGE("OIEE PASSEI AQUI");
+         /* read completed immediately */
+         sMsg.eMsgType= PHDAL4NFC_READ_MESSAGE;
+         /* Update the state */
+@@ -951,7 +989,9 @@ void phDal4Nfc_DeferredCb (void  *params)
+             /* DAL_DEBUG("dalMsg->transactInfo.length : %d\n", dalMsg->transactInfo.length); */
+             /* Make a Physical WRITE */
+             /* NOTE: need to usleep(3000) here if the write is for SWP */
+-            usleep(500);  /* NXP advise 500us sleep required between I2C writes */
++            #ifndef SWISSKNIFEVERSION
++                usleep(500);  /* NXP advise 500us sleep required between I2C writes */
++            #endif
+             gReadWriteContext.nNbOfBytesWritten = gLinkFunc.write(gReadWriteContext.pWriteBuffer, gReadWriteContext.nNbOfBytesToWrite);
+             if (gReadWriteContext.nNbOfBytesWritten != gReadWriteContext.nNbOfBytesToWrite)
+             {
+diff --git a/Linux_x86/phDal4Nfc_debug.h b/Linux_x86/phDal4Nfc_debug.h
+index a77e797..907fce8 100644
+--- a/Linux_x86/phDal4Nfc_debug.h
++++ b/Linux_x86/phDal4Nfc_debug.h
+@@ -1,6 +1,3 @@
+-
+-
+-
+ /*-----------------------------------------------------------------------------------
+                                    DEBUG CORNER
+ ------------------------------------------------------------------------------------*/
+diff --git a/Linux_x86/phDal4Nfc_uart.c b/Linux_x86/phDal4Nfc_uart.c
+index 520ab9c..3bf60f0 100644
+--- a/Linux_x86/phDal4Nfc_uart.c
++++ b/Linux_x86/phDal4Nfc_uart.c
+@@ -39,6 +39,10 @@
+ #include <stdio.h>
+ #include <errno.h>
+ 
++#ifdef SWISSKNIFEVERSION
++  #include "swissknife.h"
++#endif
++
+ #include <phDal4Nfc_debug.h>
+ #include <phDal4Nfc_uart.h>
+ #include <phOsalNfc.h>
+@@ -69,6 +73,10 @@ typedef struct
+ ------------------------------------------------------------------------------------*/
+ static phDal4Nfc_ComPortContext_t gComPortContext;
+ 
++#ifdef SWISSKNIFEVERSION
++  uint8_t last_ns = 255;
++  uint8_t last_nr = 255;
++#endif
+ 
+ 
+ /*-----------------------------------------------------------------------------
+@@ -301,6 +309,10 @@ int phDal4Nfc_uart_read(uint8_t * pBuffer, int nNbBytesToRead)
+     struct timeval *ptv;
+     struct timespec timeout;
+     fd_set rfds;
++    #ifdef SWISSKNIFEVERSION
++      struct timespec time,time2;
++      clock_gettime(CLOCK_MONOTONIC, &time);
++    #endif
+ 
+     DAL_ASSERT_STR(gComPortContext.nOpened == 1, "read called but not opened!");
+     DAL_DEBUG("_uart_read() called to read %d bytes", nNbBytesToRead);
+@@ -365,6 +377,27 @@ int phDal4Nfc_uart_read(uint8_t * pBuffer, int nNbBytesToRead)
+        }
+     }
+ 
++    #ifdef SWISSKNIFEVERSION    
++      clock_gettime(CLOCK_MONOTONIC, &time2);
++    
++      #ifdef LOGSWISSKNIFE
++        SwissKnife_Log(pBuffer,nNbBytesToRead,"Receiving message:");
++      #endif
++
++      if(rapidBitExchange && receivedMessages < 32){
++          if(nNbBytesToRead == 1){
++              if(pBuffer[0] == 0x03){
++                  msg3[receivedMessages] = (time2.tv_sec*1000000000)+time2.tv_nsec;    
++              }
++              else if (pBuffer[0] == 0x07){
++                  msgsize[receivedMessages] = (time2.tv_sec*1000000000)+time2.tv_nsec;     
++              }
++          } else if(nNbBytesToRead == 7){
++                  data[receivedMessages] = (time2.tv_sec*1000000000)+time2.tv_nsec;    
++          } 
++      }
++    #endif
++
+     return numRead;
+ }
+ 
+@@ -376,7 +409,6 @@ PURPOSE:  Writes nNbBytesToWrite bytes from pBuffer to the link
+           Returns the number of bytes that have been wrote to the interface or -1 in case of error.
+ 
+ -----------------------------------------------------------------------------*/
+-
+ int phDal4Nfc_uart_write(uint8_t * pBuffer, int nNbBytesToWrite)
+ {
+     int ret;
+@@ -385,6 +417,19 @@ int phDal4Nfc_uart_write(uint8_t * pBuffer, int nNbBytesToWrite)
+     DAL_ASSERT_STR(gComPortContext.nOpened == 1, "write called but not opened!");
+     DAL_DEBUG("_uart_write() called to write %d bytes\n", nNbBytesToWrite);
+ 
++    #ifdef SWISSKNIFEVERSION
++      if(nNbBytesToWrite > 4){
++        last_ns = pBuffer[1] & 0x07;
++        last_nr = (pBuffer[1] & 0x38) >> 3;
++      }
++      struct timespec time, time1;
++      clock_gettime(CLOCK_MONOTONIC, &time);
++
++      #ifdef LOGSWISSKNIFE
++        SwissKnife_Log(pBuffer,nNbBytesToWrite,"We are sending: ");
++      #endif
++    #endif
++        
+     while (numWrote < nNbBytesToWrite) {
+         ret = write(gComPortContext.nHandle, pBuffer + numWrote, nNbBytesToWrite - numWrote);
+         if (ret > 0) {

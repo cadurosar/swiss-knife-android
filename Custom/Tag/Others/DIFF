@@ -1,0 +1,315 @@
+
+project external/libnfc-nci/
+diff --git a/Android.mk b/Android.mk
+index 51706fe..c575264 100644
+--- a/Android.mk
++++ b/Android.mk
+@@ -61,6 +61,7 @@ LOCAL_SRC_FILES := $(call all-c-files-under, $(HALIMPL)) \
+     src/adaptation/CrcChecksum.cpp \
+     src//nfca_version.c
+ LOCAL_SHARED_LIBRARIES := liblog libcutils libhardware_legacy libstlport
++
+ LOCAL_MODULE_TAGS := optional
+ LOCAL_C_INCLUDES := external/stlport/stlport bionic/ bionic/libstdc++/include \
+     $(LOCAL_PATH)/$(HALIMPL)/include \
+@@ -74,6 +75,26 @@ LOCAL_C_INCLUDES := external/stlport/stlport bionic/ bionic/libstdc++/include \
+     $(LOCAL_PATH)/$(UDRV)/include
+ LOCAL_CFLAGS := $(D_CFLAGS) -DNFC_HAL_TARGET=TRUE -DNFC_RW_ONLY=TRUE
+ LOCAL_CPPFLAGS := $(LOCAL_CFLAGS)
++
++
++#################################################
++#               Details for swissknife          #
++#################################################
++
++#Specific 8 bit version details for swissknife
++# LOCAL_CFLAGS += -DSWISSKNIFEVERSION=8  
++
++#Specific 1 bit version details for swissknife
++LOCAL_CFLAGS += -DSWISSKNIFEVERSION=1 
++
++LOCAL_SHARED_LIBRARIES += libssl libcrypto
++#LOCAL_CFLAGS += -DLOGSWISSKNIFE  
++LOCAL_C_INCLUDES += external/openssl/include/
++
++#################################################
++#            End details for swissknife         #
++#################################################
++
+ include $(BUILD_SHARED_LIBRARY)
+ 
+ 
+diff --git a/halimpl/bcm2079x/adaptation/userial_linux.c b/halimpl/bcm2079x/adaptation/userial_linux.c
+index f41f296..c480267 100644
+--- a/halimpl/bcm2079x/adaptation/userial_linux.c
++++ b/halimpl/bcm2079x/adaptation/userial_linux.c
+@@ -36,6 +36,10 @@
+ #include "bcm2079x.h"
+ #include "config.h"
+ 
++#ifdef SWISSKNIFEVERSION
++    #include "swissknife.h"
++#endif
++
+ #define HCISU_EVT                           EVENT_MASK(APPL_EVT_0)
+ #define MAX_ERROR                           10
+ #define default_transport                   "/dev/bcm2079x"
+@@ -48,7 +52,6 @@
+ #endif
+ extern UINT8 appl_trace_level;
+ 
+-
+ /* Mapping of USERIAL_PORT_x to linux */
+ extern UINT32 ScrProtocolTraceFlag;
+ static tUPIO_STATE current_nfc_wake_state = UPIO_OFF;
+@@ -361,6 +364,9 @@ static inline int isWake(int state)
+ *******************************************************************************/
+ static void setWriteDelay(int delay)
+ {
++
++#ifndef SWISSKNIFEVERSION
++
+     if (delay <= 0) {
+         // Set a minimum delay of 5ms between back-to-back writes
+         delay = 5;
+@@ -379,6 +385,7 @@ static void setWriteDelay(int delay)
+         linux_cb.write_time.tv_nsec -= 1000*1000*1000;
+         linux_cb.write_time.tv_sec++;
+     }
++#endif    
+ }
+ 
+ /*******************************************************************************
+@@ -397,6 +404,9 @@ static void setWriteDelay(int delay)
+ *******************************************************************************/
+ static void doWriteDelay()
+ {
++
++#ifndef SWISSKNIFEVERSION
++
+     struct timespec now;
+     clock_gettime(CLOCK_MONOTONIC, &now);
+     long delay = 0;
+@@ -417,6 +427,8 @@ static void doWriteDelay()
+         ALOGD_IF((appl_trace_level>=BT_TRACE_LEVEL_DEBUG), "doWriteDelay() delay %ld ms", delay);
+         GKI_delay(delay);
+     }
++
++#endif
+ }
+ 
+ /*******************************************************************************
+@@ -632,14 +644,21 @@ int my_read(int fd, uchar *pbuf, int len)
+     create_signal_fds(&fds[1]);
+     fds[1].events = POLLIN | POLLERR | POLLRDNORM;
+     fds[1].revents = 0;
+-    t1 = clock();
++    #ifdef SWISSKNIFEVERSION
++        t1 = clock();
++    #endif
++
+     n = poll(fds, 2, _timeout);
+-    t2 = clock();
+-    perf_update(&perf_poll, t2 - t1, 0);
+-    if (_poll_t0)
+-        perf_update(&perf_poll_2_poll, t2 - _poll_t0, 0);
++    
++    #ifdef SWISSKNIFEVERSION
++        t2 = clock();
++        perf_update(&perf_poll, t2 - t1, 0);
++        if (_poll_t0)
++            perf_update(&perf_poll_2_poll, t2 - _poll_t0, 0);
++
++        _poll_t0 = t2;
+ 
+-    _poll_t0 = t2;
++    #endif
+     /* See if there was an error */
+     if (n < 0)
+     {
+@@ -660,10 +679,12 @@ int my_read(int fd, uchar *pbuf, int len)
+     else
+         count = 1;
+     do {
+-        t2 = clock();
++        #ifndef SWISSKNIFEVERSION
++            t2 = clock();
++        #else
++            clock_gettime(CLOCK_MONOTONIC, &startOfReceiving);
++        #endif
+         ret = read(fd, pbuf+offset, (size_t)count);
+-        if (ret > 0)
+-            perf_update(&perf_read, clock()-t2, ret);
+ 
+         if (ret <= 0 || !bSerialPortDevice || len < MIN_BUFSIZE)
+             break;
+@@ -708,6 +729,7 @@ int my_read(int fd, uchar *pbuf, int len)
+ /*
+  * vallidate the packet structure
+  */
++    ALOGE("TESTE"); 
+     if (ret > 0 && len >= MIN_BUFSIZE)
+     {
+         count = 0;
+@@ -733,6 +755,7 @@ int my_read(int fd, uchar *pbuf, int len)
+             }
+         } /* while*/
+     }
++
+ #endif
+ done:
+     if (!isLowSpeedTransport)
+@@ -740,6 +763,15 @@ done:
+             ret, ret, errno, count, n, _timeout);
+     if (_timeout == POLL_TIMEOUT)
+         _timeout = -1;
++ 
++    #ifdef SWISSKNIFEVERSION
++        #if SWISSKNIFEVERSION == 8
++            SwissKnife8Bits(pbuf, ret);
++        #else
++            SwissKnife1Bit(pbuf, ret);          
++        #endif
++    #endif
++
+     return ret;
+ }
+ extern BOOLEAN gki_chk_buf_damage(void *p_buf);
+@@ -792,6 +824,14 @@ UINT32 userial_read_thread(UINT32 arg)
+         }
+         if (rx_length > 0)
+         {
++            #ifdef SWISSKNIFEVERSION
++                if(shortCircuit && current_packet[1] == 0x60 && sentMessages < 32){
++                    GKI_freebuf( p_buf );
++                    bErrorReported = 0;
++                    error_count = 0;
++                    continue;
++                }
++            #endif
+             bErrorReported = 0;
+             error_count = 0;
+             iMaxError = 3;
+@@ -805,7 +845,6 @@ UINT32 userial_read_thread(UINT32 arg)
+ 
+             if (linux_cb.ser_cb != NULL)
+                 (*linux_cb.ser_cb)(linux_cb.port, USERIAL_RX_READY_EVT, (tUSERIAL_EVT_DATA *)p_buf);
+-
+             GKI_send_event(USERIAL_HAL_TASK, HCISU_EVT);
+         }
+         else
+@@ -1249,8 +1288,13 @@ UDRV_API UINT16  USERIAL_Write(tUSERIAL_PORT port, UINT8 *p_data, UINT16 len)
+     ALOGD_IF((appl_trace_level>=BT_TRACE_LEVEL_DEBUG), "USERIAL_Write: (%d bytes)", len);
+     pthread_mutex_lock(&close_thread_mutex);
+ 
+-    doWriteDelay();
+-    t = clock();
++    
++    #ifndef SWISSKNIFEVERSION
++        doWriteDelay();
++        t = clock();
++    #else
++        SwissKnife_Log(p_data,len,"I'm sending:");
++    #endif
+     while (len != 0 && linux_cb.sock != -1)
+     {
+         ret = write(linux_cb.sock, p_data + total, len);
+@@ -1267,10 +1311,12 @@ UDRV_API UINT16  USERIAL_Write(tUSERIAL_PORT port, UINT8 *p_data, UINT16 len)
+         total += ret;
+         len -= ret;
+     }
+-    perf_update(&perf_write, clock() - t, total);
+-
+-    /* register a delay for next write */
+-    setWriteDelay(total * nfc_write_delay / 1000);
++    
++    #ifndef SWISSKNIFEVERSION        
++        perf_update(&perf_write, clock() - t, total);
++        /* register a delay for next write */
++        setWriteDelay(total * nfc_write_delay / 1000);
++    #endif
+ 
+     pthread_mutex_unlock(&close_thread_mutex);
+ 
+diff --git a/halimpl/bcm2079x/hal/hal/nfc_hal_main.c b/halimpl/bcm2079x/hal/hal/nfc_hal_main.c
+index d7fc5d5..983c1b9 100644
+--- a/halimpl/bcm2079x/hal/hal/nfc_hal_main.c
++++ b/halimpl/bcm2079x/hal/hal/nfc_hal_main.c
+@@ -28,6 +28,17 @@
+ #include "userial.h"
+ #include "upio.h"
+ 
++#ifdef SWISSKNIFEVERSION
++    #include <stddef.h>
++    #include <stdio.h>
++    #include <sys/sysinfo.h>
++    #include <stdint.h>
++    #include <inttypes.h>
++    #include <sys/time.h>
++    #include <time.h>
++    #include "swissknife.h"
++#endif
++
+ /****************************************************************************
+ ** Definitions
+ ****************************************************************************/
+@@ -431,17 +442,39 @@ static void nfc_hal_main_process_quick_timer_evt (void)
+ **
+ *******************************************************************************/
+ void nfc_hal_send_nci_msg_to_nfc_task (NFC_HDR * p_msg)
+-{
+-#ifdef NFC_HAL_SHARED_GKI
+-    /* Using shared NFC/HAL GKI resources - send message buffer directly to NFC_TASK for processing */
+-    p_msg->event = BT_EVT_TO_NFC_NCI;
+-    GKI_send_msg (NFC_TASK, NFC_MBOX_ID, p_msg);
++{        
++
++#ifdef SWISSKNIFEVERSION
++    if(!shortCircuit && !sent){ 
++ 
++    #ifdef NFC_HAL_SHARED_GKI
++        /* Using shared NFC/HAL GKI resources - send message buffer directly to NFC_TASK for processing */
++        p_msg->event = BT_EVT_TO_NFC_NCI;
++        GKI_send_msg (NFC_TASK, NFC_MBOX_ID, p_msg);
++    #else
++        /* Send NCI message to the stack */
++        nfc_hal_cb.p_data_cback (p_msg->len, (UINT8 *) ((p_msg + 1)
++                                     + p_msg->offset));
++        GKI_freebuf(p_msg);
++    #endif
++    }
++    else{
++        GKI_freebuf(p_msg);
++    }
+ #else
+-    /* Send NCI message to the stack */
+-    nfc_hal_cb.p_data_cback (p_msg->len, (UINT8 *) ((p_msg + 1)
+-                                 + p_msg->offset));
+-    GKI_freebuf(p_msg);
+-#endif
++
++    #ifdef NFC_HAL_SHARED_GKI
++        /* Using shared NFC/HAL GKI resources - send message buffer directly to NFC_TASK for processing */
++        p_msg->event = BT_EVT_TO_NFC_NCI;
++        GKI_send_msg (NFC_TASK, NFC_MBOX_ID, p_msg);
++    #else
++        /* Send NCI message to the stack */
++        nfc_hal_cb.p_data_cback (p_msg->len, (UINT8 *) ((p_msg + 1)
++                                     + p_msg->offset));
++        GKI_freebuf(p_msg);
++    #endif
++
++#endif    
+ }
+ 
+ /*******************************************************************************
+@@ -715,6 +748,9 @@ UINT32 nfc_hal_main_task (UINT32 param)
+                                 GKI_freebuf(nfc_hal_cb.ncit_cb.p_rcv_msg);
+                         }
+                         nfc_hal_cb.ncit_cb.p_rcv_msg = NULL;
++                        #ifdef SWISSKNIFEVERSION
++                            GKI_send_event (NFC_HAL_TASK, NFC_HAL_TASK_EVT_DATA_RDY); //Try to search for another message after we are done with this one.
++                        #endif
+                     }
+                 }
+             } /* while (TRUE) */
